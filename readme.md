@@ -1,6 +1,6 @@
 # Transaction Inquiry: Full Callback Body Field Mapping
 
-This document provides a comprehensive breakdown of all fields within the `FITransInqCallBackRq` body. Nested child fields are represented using a tree structure for better readability.
+This document provides a comprehensive breakdown of all fields within the `FITransInqCallBackRq` body.
 
 ---
 
