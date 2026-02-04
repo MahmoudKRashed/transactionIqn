@@ -7,29 +7,29 @@ This diagram illustrates the high-level integration between SAMA, the Bank Appli
 ## 1. End-to-End Data Flow (Sequence Diagram)
 
 ```mermaid
-sequence_diagram
+sequenceDiagram
     autonumber
     participant SAMA as "SAMA (Tanfeeth)"
     participant APP as "Tanfeeth App (Bank)"
-    participant DL as "Data Lake"
+    participant DL as "Data Lake Application"
 
     Note over SAMA, APP: Phase 1: Request Processing
     SAMA->>APP: FITransInqRq (Search Criteria)
-    Note right of APP: Extract: ID, AccNum, TransNum, Date Range
+    Note right of APP: Extract: Id, AccNum, TransNum, Date Range
 
     Note over APP: Phase 2: Internal Mapping
-    APP->>APP: Map SAMA TransType (01-15) to Bank Type
+    APP->>APP: Translate SAMA TransTypes (01-15) to Bank Codes
 
     Note over APP, DL: Phase 3: Data Retrieval
-    APP->>DL: Query with [ID, AccNum, TransNum, Dates, Bank Type]
-    DL-->>APP: Return Transaction Data List (Raw Records)
+    APP->>DL: Request Data based on Case (Id, AccNum, TransNum, Dates, Bank Types)
+    DL-->>APP: Return Transaction Data List (Full SAMA-required attributes)
 
     Note over APP: Phase 4: SAMA Schema Mapping
-    APP->>APP: Transform Raw Data to SAMA Callback Structure
-    Note right of APP: Construct: AccInfo, CardInfo, MoreDtls
+    APP->>APP: Map Records to SAMA Callback Structure
+    Note right of APP: Populate: AccInfo, CardInfo, MoreDtls
 
     Note over APP, SAMA: Phase 5: Callback Response
-    APP->>SAMA: FITransInqCallBackRq (Full Transaction Details)
+    APP->>SAMA: FITransInqCallBackRq (Bilingual Payload)
 ```
 
 ---
