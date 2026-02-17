@@ -110,7 +110,63 @@ sequenceDiagram
     end
 ```
 
-## 4. Component Responsibilities & Locations
+## 4. Microservice Internal Workflow: Transaction Inquiry (Fulfillment)
+
+This diagram details the internal processing within the Transaction Inquiry Microservice, specifically focusing on the fulfillment logic after the initial acknowledgement.
+
+```mermaid
+sequenceDiagram
+    participant ESB as IBM ACE (ESB)
+    box "Transaction Inquiry Microservice" #e8f5e9
+        participant BL as Business Layer
+        participant IL as Integration Layer
+    end
+    box "Backend Systems" #f0f4c3
+        participant DL as Data Lake / Mocking Engine
+        participant DB as Core Banking / Customer DB
+    end
+
+    Note over ESB, BL: Phase 1: Request Acknowledgement
+    ESB->>BL: Inquiry Request
+    BL-->>ESB: 202 Accepted (Correlation ID)
+    
+    Note over ESB, BL: Phase 2: Fulfillment Logic
+    
+    BL->>IL: Check Bank Relation (National ID + Acc)
+    IL->>DB: Query Relation
+    DB-->>IL: Relation Status
+    IL-->>BL: Result
+    
+    alt No Bank Relation
+        Note over BL: No Relation Path
+        BL->>IL: Prepare "No Relation" Data
+        IL-->>BL: Formatted Error/Empty Response
+        BL->>ESB: Callback (Direct to ESB)
+        Note over ESB: Map to SAMA Format
+    else Bank Relation Exists
+        Note over BL: Relation Exists Path
+        
+        Note right of BL: Active Profile Check:<br/>[Data Lake] OR [Mocking Engine]
+        
+        BL->>IL: Fetch Detailed Data
+        
+        alt Data Lake Profile
+            IL->>DL: Call Data Lake APIs
+        else Mocking Engine Profile
+            IL->>DL: Fetch Mock Data
+        end
+        
+        DL-->>IL: Raw Data
+        
+        Note over IL: Integration Logic:<br/>Map Bank Codes -> SAMA Expected Codes
+        
+        IL-->>BL: SAMA-Compliant Data Object
+        BL->>ESB: Callback (Success Payload)
+        Note over ESB: Final SAMA SOAP Mapping
+    end
+```
+
+## 5. Component Responsibilities & Locations
 
 | Component | Location | Responsibility |
 | :--- | :--- | :--- |
