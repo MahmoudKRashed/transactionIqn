@@ -116,7 +116,6 @@ sequenceDiagram
     participant MQ2 as MQ Callback Queue
     participant F2 as Flow 2: Callback
     participant SAMA as SAMA Backend
-
     rect rgb(33, 150, 243, 0.1)
         Note over CBS,DB: Phase 1 — Deposit Ingestion
         CBS->>MQ1: Credit Transaction (DFDL)
@@ -133,7 +132,6 @@ sequenceDiagram
             F1->>DB: COMMIT
         end
     end
-
     rect rgb(255, 152, 0, 0.1)
         Note over F1,DB: Phase 2 — Threshold Evaluation
         F1->>F1: Condition 1: deposit + balance ≥ holdAmount?
@@ -156,7 +154,6 @@ sequenceDiagram
             end
         end
     end
-
     rect rgb(76, 175, 80, 0.1)
         Note over F1,K2: Phase 3 — K2/SAMA Notification
         F1->>DB: getCustomerByAccountNumber()
@@ -173,7 +170,6 @@ sequenceDiagram
         F1R->>DB: UpdateStatus(eventId, '2')
         F1R->>DB: INSERT K2_EXECUTION_INFO
     end
-
     rect rgb(156, 39, 176, 0.1)
         Note over K2,DB: Phase 4 — K2 Approval Processing
         K2->>ExecSvc: FulfillmentRecievedAmountApproval (SOAP)
@@ -182,18 +178,18 @@ sequenceDiagram
             ExecSvc-->>K2: SOAP Fault (User Exception)
         else Valid window
             ExecSvc->>DB: getAccountHold (validate hold)
-        loop For each Credit in CreditList
-            alt Credit.Approved = true
-                ExecSvc->>DB: UPDATE STATUS='3' (approved)
-            else Credit.Approved = false
-                ExecSvc->>DB: UPDATE STATUS='4' (rejected)
+            loop For each Credit in CreditList
+                alt Credit.Approved = true
+                    ExecSvc->>DB: UPDATE STATUS='3' (approved)
+                else Credit.Approved = false
+                    ExecSvc->>DB: UPDATE STATUS='4' (rejected)
+                end
             end
+            ExecSvc->>DB: Update declaration tables
+            ExecSvc-->>K2: SOAP Success Response
+            ExecSvc->>MQ2: Route to FULFIL.IN queue
         end
-        ExecSvc->>DB: Update declaration tables
-        ExecSvc-->>K2: SOAP Success Response
-        ExecSvc->>MQ2: Route to FULFIL.IN queue
     end
-
     rect rgb(244, 67, 54, 0.1)
         Note over MQ2,SAMA: Phase 5 — SAMA Callback
         MQ2->>F2: Consume callback message
