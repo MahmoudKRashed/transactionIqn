@@ -1,4 +1,5 @@
 # Tanfeeth Fulfillment — Received Amount Service
+
 ## High-Level Design (HLD)
 
 **Version:** 1.0  
@@ -145,7 +146,7 @@ sequenceDiagram
             alt Condition 2 met
                 F1->>F1: K2=true, depositRecords=true
             else Condition 2 not met
-                F1->>F1: Condition 3: deposit + sum ≥ 5,000?
+                F1->>F1: Condition 3: deposit + sum ≥ SamaReportingThreshold?
                 alt Condition 3 met
                     F1->>F1: K2=true, depositRecords=true
                 else No condition met
@@ -176,7 +177,11 @@ sequenceDiagram
     rect rgb(156, 39, 176, 0.1)
         Note over K2,DB: Phase 4 — K2 Approval Processing
         K2->>ExecSvc: FulfillmentRecievedAmountApproval (SOAP)
-        ExecSvc->>DB: getAccountHold (validate hold)
+        ExecSvc->>ExecSvc: Check Submission Window (BR-02, BR-03)
+        alt Out of window (Window: 21:00 - 06:00)
+            ExecSvc-->>K2: SOAP Fault (User Exception)
+        else Valid window
+            ExecSvc->>DB: getAccountHold (validate hold)
         loop For each Credit in CreditList
             alt Credit.Approved = true
                 ExecSvc->>DB: UPDATE STATUS='3' (approved)
@@ -228,6 +233,7 @@ graph LR
 ```
 
 **Key Design Decisions:**
+
 - DFDL parsing for ICS mainframe-format messages
 - Explicit `COMMIT` after deposit insert (before threshold evaluation)
 - Three-condition threshold evaluation in priority order
@@ -547,7 +553,7 @@ flowchart TD
 |---------|--------------------|-----------------------|
 | Condition 1 (single deposit + balance ≥ hold) | Current deposit only | `false` |
 | Condition 2 (cumulative ≥ hold) | Current deposit + all pending from DB | `true` |
-| Condition 3 (cumulative ≥ 5,000) | Current deposit + all pending from DB | `true` |
+| Condition 3 (cumulative ≥ SamaReportingThreshold UDP) | Current deposit + all pending from DB | `true` |
 
 ---
 
@@ -558,9 +564,12 @@ flowchart TD
 | UDP | Default | Scope | Description |
 |-----|---------|-------|-------------|
 | `LoggerName` | `FulfillmentRecievedAmount` | Flow 1 | Log4j logger name |
+| `SamaReportingThreshold` | `5000.00` | Flow 1 | Dynamic threshold for sending deposit reports to SAMA |
 | `endPointURL` | `Http://K2` | K2Call subflow | K2 SOAP endpoint URL |
 | `SAMAEndpoint` | `http://samaendpoint` | Callback flow | SAMA SOAP endpoint URL |
 | `ISCALLBACK_REQUIRED` | `('E1020024','E1020025')` | ExecSvc | SAMA status codes requiring callback |
+| `SamaSubmissionStartTime`| `'21:00:00'` | ExecSvc | Start of SAMA allowed window (BR-02) |
+| `SamaSubmissionEndTime` | `'06:00:00'` | ExecSvc | End of SAMA allowed window (BR-02) |
 
 ### 8.2 Data Sources
 
@@ -645,17 +654,57 @@ graph TD
 
 ---
 
-## 12. Known Limitations & Future Improvements
+## 12. Phase 4: K2 Confirmation Processing
+
+This process activates when the K2 portal returns approval payloads back through `TanfeethExecutionProcessService`.
+
+### 12.1 Execution Routing
+1. The K2 portal invokes the `FulfillmentRecievedAmountApproval` process via ESB.
+2. The core router maps the incoming approval to the `IIB.TNFTH.EXECUTION.K2.PRCS.FULFIL.IN` internal queue.
+3. The original declaration and deposit lists are re-queried, updating execution logic.
+4. Database updates trigger status shifts to `STATUS = '3'` (Approved) or `STATUS = '4'` (Rejected).
+
+---
+
+## 13. Phase 5: SAMA Callback Integration
+
+This phase manages the outbound notification to the SAMA endpoint confirming that the held funds have successfully been reserved for fulfillment.
+
+### 13.1 Callback Logic
+1. Messages land on `IIB.TNFTH.EXECUTION.K2.PRCS.FULFIL.IN`.
+2. The Integration App formats the payload via DFDL/XML schema parameters towards `FIFFResrvdAmtCallBack`.
+3. If an HTTP connection issue or 500 error takes place with SAMA, the system logs the fault and transitions into the Fallback sequence.
+4. The response status is logged comprehensively into `TANFEETHEXEC.K2_EXECUTION_INFO` to leave a robust audit trail.
+
+---
+
+## 14. Known Limitations & Future Improvements
 
 | # | Limitation | Impact | Priority |
 |---|------------|--------|----------|
 | 1 | Only first hold record processed per account | Multiple holds ignored | High |
-| 2 | 5,000 SAR threshold hardcoded | Requires code deployment to change | High |
-| 3 | FLOAT used for monetary calculations | Precision risk | High |
 | 4 | No idempotency / deduplication | Duplicate deposits on MQ retry | High |
-| 5 | Exchange rate hardcoded to 1.0 for current deposit | Cross-currency deposits incorrect | Medium |
 | 6 | PII logged in full | SAMA data protection non-compliance | Medium |
 | 7 | Single error code for all DB failures | Hard to diagnose in production | Low |
 | 8 | SOAP field typos (`DepositeCurrency`, `ExchnageRate`) | Can't fix without SAMA schema change | Low |
-| 9 | Phases 4-5 not documented in spec | Knowledge gap for maintenance | Medium |
+| 9 | ~~Phases 4-5 not documented in spec~~ | [RESOLVED] Phase 4-5 documented in Sections 12-13 | N/A |
 | 10 | No monitoring metrics | Limited operational visibility | Medium |
+
+---
+
+## 15. SAMA Submission Gatekeeper (Time/Calendar Validation)
+
+This logic enforces SAMA regulatory windows for manual approvals received from the K2 portal.
+
+### 15.1 Business Rules
+*   **BR-02 (Time Window)**: Manual approvals from K2 are only permitted when `CURRENT_TIME` is between `SamaSubmissionStartTime` and `SamaSubmissionEndTime` (default 21:00 to 06:00).
+*   **BR-03 (Calendar Restriction)**: Manual approvals are blocked on:
+    *   **Fridays** (IIB `DAYOFWEEK` = 6)
+    *   **Saturdays** (IIB `DAYOFWEEK` = 7)
+    *   **Official Holidays** (Determined via `checkIsHoliday` procedure in `Utils.esql`)
+
+### 15.2 Implementation
+*   **Entry Point**: `FulfillmentRecievedAmount_processRequest.esql :: Main()`
+*   **Error Handling**: If a check fails, a `USER EXCEPTION` is thrown with a descriptive message, which triggers a SOAP Fault back to the K2 user.
+*   **Configurability**: The window start and end times are configurable via **User-Defined Properties (UDPs)** without needing a code redeploy.
+

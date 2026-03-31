@@ -14,10 +14,10 @@
 | **Data Integrity** | 0 | 2 | 1 | 0 | **3** |
 | **Error Handling** | 1 | 1 | 1 | 0 | **3** |
 | **Security & Compliance** | 0 | 0 | 2 | 0 | **2** |
-| **Architecture & Design** | 0 | 1 | 3 | 0 | **4** |
+| **Architecture & Design** | 0 | 1 | 4 | 0 | **5** |
 | **Code Quality** | 0 | 0 | 1 | 5 | **6** |
-| **Spec & Documentation** | 1 | 0 | 2 | 1 | **4** |
-| **Total** | **3** | **6** | **10** | **6** | **25** |
+| **Spec & Documentation** | 1 | 0 | 3 | 1 | **5** |
+| **Total** | **3** | **6** | **12** | **6** | **27** |
 
 ---
 
@@ -38,10 +38,12 @@ These issues cause **incorrect behavior** or **regulatory risk**.
 | **Impact** | SAMA receives credits without EventIds — K2 cannot map approvals back to deposits |
 
 **Problem:** Two bugs compound:
+
 1. `getTotalDepositAMT` doesn't SELECT `EVENTID`
 2. Credit loop references `eventIdROW.records[1].EVENT_ID` (wrong field name, wrong record)
 
 **Fix:**
+
 ```diff
 -- Utils.esql — add EVENTID to SELECT:
 - SELECT DEPOSIT_AMOUNT, DEPOSIT_CURRENCY, HOLD_EXCHANGE_RATE, TRANSACTIONID
@@ -49,8 +51,10 @@ These issues cause **incorrect behavior** or **regulatory risk**.
 
 -- ProcessingData.esql Line 165 — reference loop record:
 - SET creditRefLoop.ns:EventId = eventIdROW.records[1].EVENT_ID;
-+ SET creditRefLoop.ns:EventId = record.EVENTID;
++ SET creditRefLoop.ns:EventId = CAST(record.EVENTID AS CHARACTER);
 ```
+
+**Status:** ✅ Fixed in Phase 1
 
 ---
 
@@ -68,6 +72,8 @@ These issues cause **incorrect behavior** or **regulatory risk**.
 
 **Fix:** Wrap DB operations in `BEGIN...END` blocks with SQL error handlers, matching the pattern used in `ProcessingData.esql`.
 
+**Status:** ✅ Fixed in Phase 1
+
 ---
 
 ### C-04: Undocumented Status Values '3' and '4'
@@ -83,6 +89,8 @@ These issues cause **incorrect behavior** or **regulatory risk**.
 **Problem:** The status lifecycle is undocumented in the spec (`0→1`, `0→2→3/4`), which leads to confusion. Status `3` and `4` need to be explicitly documented.
 
 **Fix:** Document the full lifecycle (`0→1`, `0→2→3/4`), quote status values (`'3'`, `'4'`) in the code.
+
+**Status:** ✅ Fixed in Phase 1
 
 ---
 
@@ -104,6 +112,8 @@ These issues cause **data quality problems** or **operational risk**.
 
 **Fix:** Replace all `FLOAT` declarations with `DECIMAL` for monetary variables: `depositAmt`, `totalValue`, `holdAccValue`, `TotalApprovedAccCur`, `TotalAmtReqCurr`, `TotalAmtSAR`, `TotalAmt`, `AppliedRate`.
 
+**Status:** 🟡 Partially Fixed (ProcessingData.esql updated in Phase 2, ExecSvc pending)
+
 ---
 
 ### H-02: Unreachable THROW After RESIGNAL
@@ -118,6 +128,8 @@ These issues cause **data quality problems** or **operational risk**.
 
 **Fix:** Pick one strategy per handler — either `RESIGNAL` (re-throw original) or `THROW USER EXCEPTION` (custom message), not both.
 
+**Status:** ❌ Discarded (Kept THROW as fallback per operational requirement)
+
 ---
 
 ### H-03: TotalApprovedAccCur Adds Declaration Total
@@ -131,6 +143,8 @@ These issues cause **data quality problems** or **operational risk**.
 
 **Problem:** `TotalApprovedAccCur = newlyApproved + existingDeclaration.TOTAL_AMOUNT`. While the downstream callback caps this at `HOLD_AMOUNT`, the semantic is misleading and could cause reporting errors.
 
+**Status:** 🟡 Pending Comment-Out for Investigation (Phase 2)
+
 ---
 
 ### H-04: Only Last Approved EventID Stored
@@ -143,6 +157,7 @@ These issues cause **data quality problems** or **operational risk**.
 | **Impact** | If multiple credits approved, only last EventId is passed downstream — loss of traceability |
 
 **Fix:**
+
 ```diff
 - SET EnvVarRef.ApprovedList.EventID = creditRecord.EventId;
 + CREATE LASTCHILD OF EnvVarRef.ApprovedList NAME 'EventID' VALUE creditRecord.EventId;
@@ -160,6 +175,8 @@ These issues cause **data quality problems** or **operational risk**.
 | **Impact** | STATUS updates committed at line 66, but `UpdateDeclration` / `UpdateDeclrationDtls` (lines 67-68) may fail after commit — leaving DB inconsistent |
 
 **Fix:** Move all DB operations into a single transactional block, commit all at end, or use savepoints.
+
+**Status:** ✅ Fixed in Phase 1
 
 ---
 
@@ -191,6 +208,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **File** | ProcessingData.esql, Line 118 |
 | **Requirement** | Constraint C2, Improvement I2 |
 | **Fix** | Externalize as UDP or DB config value |
+| **Status** | ✅ Fixed (Externalized to `SamaReportingThreshold` UDP in Phase 2) |
 
 ---
 
@@ -203,6 +221,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **File** | ProcessingData.esql, Line 153 |
 | **Requirement** | Constraint C3, Improvement I5 |
 | **Fix** | Use actual exchange rate when deposit currency ≠ account currency |
+| **Status** | ✅ Fixed in Phase 2 (Mapped to `HOLD_EXCHANGE_RATE`) |
 
 ---
 
@@ -215,6 +234,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **File** | ProcessingData.esql, Line 50 |
 | **Requirement** | NFR-07 |
 | **Fix** | Mask account numbers, customer names, national IDs before logging |
+| **Status** | 🟡 Business Edge Case (PII Leakage risk accepted for now) |
 
 ---
 
@@ -227,6 +247,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **File** | ProcessingData.esql |
 | **Requirement** | NFR-05 |
 | **Fix** | Check `TransactionId` uniqueness before INSERT, or use UNIQUE constraint on table |
+| **Status** | 🟡 Business Edge Case (Duplicate MQ insertion risk accepted for now) |
 
 ---
 
@@ -250,6 +271,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **Files** | All error handlers |
 | **Requirement** | Improvement I8 |
 | **Fix** | Use distinct codes: `C001` (INSERT), `C002` (UPDATE), `C003` (SELECT), `C004` (callback) |
+| **Status** | 🟡 Business Edge Case (Generic debugging accepted for now) |
 
 ---
 
@@ -261,6 +283,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **App** | ReceivedAmountApp |
 | **File** | ProcessingData.esql, Line 74-75 |
 | **Fix** | Check `EXISTS(currencyExponent.records[])` before accessing `.EXPONENT` |
+| **Status** | 🟡 Business Edge Case (Fatal crash on invalid currency code accepted) |
 
 ---
 
@@ -272,6 +295,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **App** | Both |
 | **Files** | Utils.esql (Line 8) vs FulfillmentRecievedAmount_processRequest.esql (Line 131) |
 | **Fix** | Consolidate `getAccountHoldByAccountNumberCriteriaID` into shared library with explicit column list |
+| **Status** | 🟡 Business Edge Case (Schema drift risk via duplicate SQL accepted) |
 
 ---
 
@@ -282,6 +306,7 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **Category** | Spec & Documentation |
 | **Impact** | K2 confirmation handling and SAMA callback flow are entirely undocumented |
 | **Fix** | Add §12 K2 Confirmation Processing and §13 SAMA Callback to spec |
+| **Status** | ✅ Fixed (HLD updated with Phase 4/5 logic) |
 
 ---
 
@@ -293,6 +318,20 @@ These are **design gaps** or **compliance risks** that don't cause immediate fai
 | **App** | ReceivedAmountApp |
 | **File** | LoggingResponseAndUpdatingStatus.esql, Line 21 |
 | **Fix** | Add to BR-06 status definitions |
+| **Status** | ✅ Fixed (Documented in HLD Section 5.2) |
+
+---
+
+### M-11: SAMA Submission Timing Compliance (New Rule)
+
+| Attribute | Detail |
+|-----------|--------|
+| **Category** | Architecture & Design / Compliance |
+| **App** | ExecutionProcessService |
+| **File** | FulfillmentRecievedAmount_processRequest.esql |
+| **Impact** | Risk of SAMA rejection if manual users approve outside of 21:00-06:00 window |
+| **Fix** | Implemented UDP-based time window and calendar/holiday check in the approval module |
+| **Status** | ✅ Fixed |
 
 ---
 
