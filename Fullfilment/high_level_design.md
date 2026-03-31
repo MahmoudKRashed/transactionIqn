@@ -365,23 +365,27 @@ erDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending : INSERT (Phase 1)
+    [*] --> 0
     
-    Pending --> Processed : Below threshold<br/>No notification needed
-    Pending --> SentToK2 : Threshold met<br/>SAMA notified via K2
+    0 --> 1 : Processed (Threshold not met)
+    0 --> 2 : Threshold met, Sent to K2
 
-    SentToK2 --> Approved : K2 approves credit
-    SentToK2 --> Rejected : K2 rejects credit
+    1 --> 3 : Sent to K2 -> Approved
+    1 --> 4 : Sent to K2 -> Rejected
+    2 --> 3 : Approved by K2
+    2 --> 4 : Rejected by K2
 
-    Processed --> [*]
-    Approved --> [*]
-    Rejected --> [*]
+    1 --> [*]
+    3 --> [*]
+    4 --> [*]
 
-    state "STATUS = '0'" as Pending
-    state "STATUS = '1'" as Processed
-    state "STATUS = '2'" as SentToK2
-    state "STATUS = '3'" as Approved
-    state "STATUS = '4'" as Rejected
+    state "STATUS = '0' (Just Inserted)" as 0
+    state "STATUS = '1' (Pending in Quota)" as 1
+    state "STATUS = '2' (Sent to K2)" as 2
+    state "STATUS = '3' (Approved)" as 3
+    state "STATUS = '4' (Rejected)" as 4
+    
+    note right of 1 : Awaits cumulative threshold.<br/>Summations and fetch queries<br/>target this status.
 ```
 
 ### 5.3 Key Database Queries

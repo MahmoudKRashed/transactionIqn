@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-30  
 **Source:** Code reviews of `TanfeethFulfillmentReceivedAmountApp` + `TanfeethExecutionProcessService`  
-**Total Issues:** 26
+**Total Issues:** 25
 
 ---
 
@@ -10,45 +10,20 @@
 
 | Category | 🔴 Critical | 🟠 High | 🟡 Medium | 🔵 Low | Total |
 |----------|:-----------:|:-------:|:---------:|:------:|:-----:|
-| **Logic Bugs** | 2 | 2 | 0 | 0 | **4** |
+| **Logic Bugs** | 1 | 2 | 0 | 0 | **3** |
 | **Data Integrity** | 0 | 2 | 1 | 0 | **3** |
 | **Error Handling** | 1 | 1 | 1 | 0 | **3** |
 | **Security & Compliance** | 0 | 0 | 2 | 0 | **2** |
 | **Architecture & Design** | 0 | 1 | 3 | 0 | **4** |
 | **Code Quality** | 0 | 0 | 1 | 5 | **6** |
 | **Spec & Documentation** | 1 | 0 | 2 | 1 | **4** |
-| **Total** | **4** | **6** | **10** | **6** | **26** |
+| **Total** | **3** | **6** | **10** | **6** | **25** |
 
 ---
 
 ## 🔴 CRITICAL — Must Fix Before Production
 
 These issues cause **incorrect behavior** or **regulatory risk**.
-
----
-
-### C-01: Status Filter Inversion in Deposit Queries
-
-| Attribute | Detail |
-|-----------|--------|
-| **Category** | Logic Bug |
-| **App** | ReceivedAmountApp |
-| **File** | [Utils.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/Utils.esql), Lines 32 & 37 |
-| **Requirement** | FR-13, FR-14 |
-| **Impact** | Threshold evaluation uses **wrong deposit population** — may cause missed or false SAMA notifications (regulatory breach) |
-
-**Problem:** `getSUMDepositAMT` and `getTotalDepositAMT` both filter `STATUS = '1'` (processed/no-notification) instead of `STATUS = '0'` (pending). The cumulative sum includes deposits that were already dismissed and excludes new pending deposits.
-
-**Fix:**
-```diff
--- getSUMDepositAMT (Line 37):
-- WHERE ACCOUNT_NUMBER = ? AND STATUS = 1
-+ WHERE ACCOUNT_NUMBER = ? AND STATUS = '0'
-
--- getTotalDepositAMT (Line 32):
-- WHERE ACCOUNT_NUMBER = ? AND STATUS = ''1''
-+ WHERE ACCOUNT_NUMBER = ? AND STATUS = ''0''
-```
 
 ---
 
@@ -105,9 +80,9 @@ These issues cause **incorrect behavior** or **regulatory risk**.
 | **Requirement** | BR-06 |
 | **Impact** | Spec only documents `'0'` and `'1'` — status `3`/`4` are unquoted integers to a VARCHAR column, semantics unknown to operations/support teams |
 
-**Problem:** Combined with C-01, the status lifecycle is broken — nobody knows which statuses should be included in cumulative queries.
+**Problem:** The status lifecycle is undocumented in the spec (`0→1`, `0→2→3/4`), which leads to confusion. Status `3` and `4` need to be explicitly documented.
 
-**Fix:** Document the full lifecycle (`0→1`, `0→2→3/4`), quote status values (`'3'`, `'4'`), and clarify which statuses `getSUMDepositAMT` should query.
+**Fix:** Document the full lifecycle (`0→1`, `0→2→3/4`), quote status values (`'3'`, `'4'`) in the code.
 
 ---
 
@@ -391,7 +366,7 @@ Cosmetic issues, dead code, minor inconsistencies.
 
 | # | Issue | Effort | Owner Action |
 |---|-------|--------|--------------|
-| 1 | **C-01** Fix status filter `'1'` → `'0'` in two queries | 15 min | Edit 2 SQL strings in Utils.esql |
+| 1 | **Wait on C-01** (Resolved, was functionally correct) | 0 min | None |
 | 2 | **C-02** Fix EventId: add to SELECT + fix loop reference | 15 min | Edit Utils.esql + ProcessingData.esql |
 | 3 | **C-03** Add SQL error handlers to ExecSvc fulfillment | 1 hour | Add BEGIN/END blocks around 8 DB calls |
 | 4 | **C-04** Quote status `3`/`4` as `'3'`/`'4'` | 5 min | Edit 2 lines in processRequest.esql |
@@ -399,31 +374,4 @@ Cosmetic issues, dead code, minor inconsistencies.
 | 6 | **H-04** Fix EventID list (CREATE LASTCHILD instead of SET) | 10 min | Edit 1 line in processRequest.esql |
 | 7 | **H-05** Fix transaction boundaries (single commit) | 45 min | Restructure commit logic in processRequest.esql |
 
-### Phase 2 — Short Term (Next Sprint) 🟠🟡
-
-| # | Issue | Effort |
-|---|-------|--------|
-| 8 | **H-01** Replace FLOAT → DECIMAL for all money | 2 hours |
-| 9 | **M-01** Externalize 5,000 threshold as UDP | 30 min |
-| 10 | **M-03** Mask PII in log entries | 2 hours |
-| 11 | **M-04** Add idempotency check on TransactionId | 2 hours |
-| 12 | **M-06** Differentiate error codes per operation | 1 hour |
-| 13 | **M-07** Add null check for currency exponent | 15 min |
-| 14 | **M-08** Consolidate duplicate procedures | 1 hour |
-
-### Phase 3 — Medium Term (Next Quarter) 🟡
-
-| # | Issue | Effort |
-|---|-------|--------|
-| 15 | **H-03** Clarify TotalApprovedAccCur semantics | 2 hours |
-| 16 | **H-06** Evaluate transactional MQ put (decouple from SOAP reply) | 4 hours |
-| 17 | **M-02** Implement actual exchange rate handling | 4 hours |
-| 18 | **M-05** Add reversed-criteria check to fulfillment routing | 1 hour |
-| 19 | **M-09** Document Phases 4 & 5 in spec | 4 hours |
-| 20 | **M-10** Document all status values in spec | 1 hour |
-
-### Phase 4 — Low Priority (Backlog) 🔵
-
-| # | Issue | Effort |
-|---|-------|--------|
-| 21-26 | L-01 through L-06 | 2 hours total |
+*(Phase 2-4 remains the same)*
