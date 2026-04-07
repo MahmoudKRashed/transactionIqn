@@ -6,7 +6,7 @@
 **Date:** 2026-03-30  
 **Status:** Extracted from production IIB codebase  
 **System:** ESB Integration Layer (IBM IIB)  
-**Regulatory Body:** SAMA (Saudi Arabian Monetary Authority)
+**Regulatory Body:** SAMA (Saudi Arabian Monetary Authority)jdbc
 
 ---
 
@@ -50,7 +50,7 @@ graph TB
     K2 -->|SOAP| ExecSvc
     ExecSvc -->|MQ/XMLNSC| App1
     App1 -->|SOAP| SAMA
-    App1 & ExecSvc <-->|JDBC| DB
+    App1 & ExecSvc <-->|ODBC| DB
 ```
 
 ---
@@ -65,7 +65,7 @@ graph TB
 | **K2 / SAMA Adapter** | `K2IntService.svc` | SOAP/HTTP | Outbound | Send received amount notification |
 | **K2 / SAMA Adapter** | `TanfeethExecutionProcessService` | SOAP/HTTP | Inbound | Receive approval/rejection |
 | **SAMA Backend** | `FIFFResrvdAmtCallBack` | SOAP/HTTP | Outbound | Report final approved amounts |
-| **Tanfeeth Database** | `SAIBAPP` JDBC | SQL/JDBC | Bidirectional | Persistence & lookups |
+| **Tanfeeth Database** | `SAIBAPP` ODBC | SQL/ODBC | Bidirectional | Persistence & lookups |
 
 ### 2.2 Application Components
 
