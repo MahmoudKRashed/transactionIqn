@@ -112,7 +112,7 @@ These issues cause **data quality problems** or **operational risk**.
 
 **Fix:** Replace all `FLOAT` declarations with `DECIMAL` for monetary variables: `depositAmt`, `totalValue`, `holdAccValue`, `TotalApprovedAccCur`, `TotalAmtReqCurr`, `TotalAmtSAR`, `TotalAmt`, `AppliedRate`.
 
-**Status:** 🟡 Partially Fixed (ProcessingData.esql updated in Phase 2, ExecSvc pending)
+**Status:** ✅ Fixed (Converted to `DECIMAL` across modules)
 
 ---
 

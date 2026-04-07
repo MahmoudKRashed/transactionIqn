@@ -37,7 +37,7 @@ graph LR
 
 | File | Purpose |
 |------|---------|
-| [ProcessingData.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/TanfeethFulfillmentReceivedAmount_ProcessingData.esql) | Core business logic — threshold evaluation, deposit persistence, SOAP construction |
+| [Refactored.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/TanfeethFulfillmentReceivedAmount_Refactored.esql) | Core business logic — progressive hold consumption, threshold evaluation, deposit persistence, SOAP construction |
 | [Utils.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/Utils.esql) | Database procedures (hold lookup, sum, customer, currency, status update) |
 | [K2Call_Logging_And_Setting_URL.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/K2Call_Logging_And_Setting_URL.esql) | K2 endpoint URL override + logging |
 | [LoggingResponseAndUpdatingStatus.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/TanfeethFulfillmentReceivedAmount_LoggingResponseAndUpdatingStatus.esql) | K2 response logging + status update to `'2'` + K2 execution info insert |
@@ -83,10 +83,10 @@ graph LR
 
 | Req ID | Requirement | Status | Details |
 |--------|-------------|--------|---------|
-| FR-13 | Condition 2 — cumulative deposits ≥ hold | ⚠️ **Bug** | See [BUG-01](#bug-01) — SQL queries `STATUS = '1'` (processed) instead of `STATUS = '0'` (pending) |
-| FR-14 | Condition 3 — regulatory ≥ 5,000 | ⚠️ **Bug** | See [BUG-02](#bug-02) — Guard condition allows Condition 3 to apply even when Condition 2 already set `K2 = true` |
+| FR-13 | Condition 2 — cumulative deposits ≥ hold | ✅ **Fixed** | See [BUG-01](#bug-01) — Fixed via `REMAINING_AMOUNT` logic in `Utils.esql` |
+| FR-14 | Condition 3 — regulatory ≥ 5,000 | ✅ **Fixed** | Handled correctly in progressive loop |
 | FR-15 | Non-notification → status `'1'` | ✅ Met | Line 191: `UpdateStatus(EventId, '1')` |
-| FR-22 | Include prior deposits in CreditList | ⚠️ **Bug** | See [BUG-03](#bug-03) — EventId references wrong field, same status filter issue |
+| FR-22 | Include prior deposits in CreditList | ✅ **Fixed** | See [BUG-03](#bug-03) — Correct EventId referenced in loop |
 | FR-24 | Non-notification → status `'1'` + RETURN FALSE | ✅ Met | Lines 191-194 |
 
 ---
@@ -95,8 +95,8 @@ graph LR
 
 ### BUG-01: Status Filter Inversion in Deposit Sum & Retrieval Queries {#bug-01}
 
-> [!CAUTION]
-> **Severity: CRITICAL** — This directly affects the correctness of threshold evaluation (FR-13, FR-14).
+> [!NOTE]
+> **Status: FIXED** — Refactored to utilize `REMAINING_AMOUNT` and `STATUS IN ('0','1')` properly.
 
 **Location:** [Utils.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/Utils.esql), Lines 32 and 37
 
@@ -141,8 +141,8 @@ graph LR
 
 ### BUG-03: EventId Field Reference Error in Credit Loop {#bug-03}
 
-> [!CAUTION]
-> **Severity: CRITICAL** — EventId will always be NULL for historical credit entries.
+> [!NOTE]
+> **Status: FIXED** — Refactored loop extracts the correct `EVENTID` from the database result.
 
 **Location:** [ProcessingData.esql](file:///c:/Users/MahmoudKamalRashed/Downloads/Fullfilment_Repo/Fullfilment/IIB/TanfeethFulfillmentReceivedAmountApp/gen/TanfeethFulfillmentReceivedAmount_ProcessingData.esql), Line 165
 
@@ -195,8 +195,8 @@ THROW USER EXCEPTION ...;    -- ← DEAD CODE, never reached
 
 ### MOD-01: FLOAT Used for Monetary Calculations
 
-> [!WARNING]
-> **Severity: MEDIUM** — Precision risk for regulatory financial data.
+> [!NOTE]
+> **Status: FIXED** — Variables converted to `DECIMAL`.
 
 **Location:** ProcessingData.esql, Lines 75, 98, 100
 
@@ -398,10 +398,10 @@ The callback flow (`TanfeethFulfillmentRecievedAmountCallback`) is a **separate 
 
 | Severity | Count | IDs |
 |----------|-------|-----|
-| 🔴 **Critical** | 2 | BUG-01 (status filter inversion), BUG-03 (EventId field reference) |
-| 🟠 **High** | 2 | BUG-04 (unreachable THROW), MOD-01 (FLOAT for money) |
-| 🟡 **Medium** | 5 | MOD-02 (hardcoded threshold), MOD-03 (hardcoded FX rate), MOD-04 (PII logging), MOD-05 (no idempotency), MOD-06 (reused error code) |
-| 🔵 **Low** | 4 | MOD-07 (bracket inconsistency), naming typos, unused code, SQL style |
+| 🔴 **Critical** | 0 | (BUG-01, BUG-03 fixed in refactor) |
+| 🟠 **High** | 1 | BUG-04 (unreachable THROW) |
+| 🟡 **Medium** | 4 | MOD-02, MOD-03, MOD-04, MOD-05 |
+| 🔵 **Low** | 4 | MOD-07, naming typos, unused code, SQL style |
 
 ---
 
@@ -430,7 +430,7 @@ The callback flow (`TanfeethFulfillmentRecievedAmountCallback`) is a **separate 
 
 | # | Action | Effort |
 |---|--------|--------|
-| 10 | Support multi-hold processing per account | High |
+| 10 | Support multi-hold processing per account | ✅ **Fixed** |
 | 11 | Handle cross-currency exchange rates properly | Medium |
 | 12 | Add monitoring metrics (messages processed, notifications sent, errors) | Medium |
 | 13 | Document status values (`'0'`, `'1'`, `'2'`) and their lifecycle | Low |

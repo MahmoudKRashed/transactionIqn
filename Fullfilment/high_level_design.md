@@ -283,6 +283,7 @@ erDiagram
         VARCHAR ACCOUNT_NUMBER
         VARCHAR CUSTOMER_NUMBER
         DECIMAL DEPOSIT_AMOUNT
+        DECIMAL REMAINING_AMOUNT
         VARCHAR DEPOSIT_CURRENCY
         VARCHAR ACCOUNT_CURRENCY
         VARCHAR STATUS "0=Pending, 1=Processed, 2=SentToK2, 3=Approved, 4=Rejected"
@@ -297,6 +298,15 @@ erDiagram
         VARCHAR CREATE_USER
         TIMESTAMP UPDATE_DATETIME
         VARCHAR UPDATE_USER
+    }
+
+    HOLD_FULFILLMENT_STATUS {
+        NUMBER ID PK "Sequence: HOLD_FULFILLMENT_STATUS_SEQ"
+        VARCHAR ACCOUNT_NUMBER
+        VARCHAR CRITERIA_ID FK
+        DECIMAL HOLD_AMOUNT
+        DECIMAL ACCUMULATED_AMOUNT
+        VARCHAR STATUS "1=Partially Fulfilled, 2=Fully Fulfilled"
     }
 
     ACCOUNT_HOLD {
@@ -361,6 +371,7 @@ erDiagram
     ACCOUNT_HOLD ||--o{ CRITERIA_DETAILS : "joined via CRITERIA_ID"
     EXE_ACCOUNTS ||--o{ EXE_CUSTOMER : "joined via CRITERIA_ID"
     FULFILLMENT_DEPOSIT_AMOUNTS }o--|| ACCOUNT_HOLD : "by ACCOUNT_NUMBER"
+    HOLD_FULFILLMENT_STATUS }o--|| ACCOUNT_HOLD : "tracks fulfillment"
 ```
 
 ### 5.2 Deposit Status Lifecycle
@@ -520,26 +531,28 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    Start["New Credit Deposit<br/>to Held Account"] --> HasHold{"Account has<br/>active hold?"}
+    Start["New Credit Deposit"] --> HasHold{"Account has<br/>active holds?"}
     HasHold -->|No| End1["Log + Terminate<br/>No action"]
-    HasHold -->|Yes| CalcAmt["Calculate deposit amount<br/>rawAmt / 10^currencyExponent"]
-    CalcAmt --> InsertDB["Insert deposit record<br/>STATUS = '0', COMMIT"]
-    InsertDB --> C1{"Condition 1<br/>deposit + accountBalance<br/>≥ holdAmount?"}
+    HasHold -->|Yes| CalcAmt["Calculate deposit amount<br/>Insert record (STATUS '0')"]
+    CalcAmt --> HoldLoop["Loop over all active holds<br/>(Exclude fully fulfilled)"]
+    HoldLoop --> Consume["ConsumeRemainingAmount<br/>Update Hold & Deposit Remaining Amts"]
+    Consume --> C1{"Condition 1<br/>Single deposit ≥ hold?"}
     
-    C1 -->|Yes| Notify1["Notify K2/SAMA<br/>CreditList = current only"]
-    C1 -->|No| SumQuery["Query SUM of<br/>pending deposits"]
-    SumQuery --> C2{"Condition 2<br/>deposit + sumDeposits<br/>≥ holdAmount?"}
+    C1 -->|Yes| Notify1["Notify K2/SAMA<br/>CreditList = current"]
+    C1 -->|No| SumQuery["Get accumulated credit for hold"]
+    SumQuery --> C2{"Condition 2<br/>Accumulated ≥ hold?"}
     
-    C2 -->|Yes| Notify2["Notify K2/SAMA<br/>CreditList = current + all pending"]
-    C2 -->|No| C3{"Condition 3<br/>deposit + sumDeposits<br/>≥ 5,000 SAR?"}
+    C2 -->|Yes| Notify2["Notify K2/SAMA<br/>CreditList = current + pending"]
+    C2 -->|No| C3{"Condition 3<br/>Accumulated ≥ SamaThreshold?"}
     
-    C3 -->|Yes| Notify3["Notify K2/SAMA<br/>CreditList = current + all pending"]
-    C3 -->|No| NoNotify["Update STATUS → '1'<br/>No notification"]
+    C3 -->|Yes| Notify3["Notify K2/SAMA<br/>CreditList = current + pending"]
+    C3 -->|No| NextHold["Next hold in loop"]
+    NextHold --> End2["Update STATUS → '1'<br/>if no holds triggered notification"]
 
     style Notify1 fill:#4CAF50,color:#fff
     style Notify2 fill:#4CAF50,color:#fff
     style Notify3 fill:#FF9800,color:#fff
-    style NoNotify fill:#9E9E9E,color:#fff
+    style End2 fill:#9E9E9E,color:#fff
     style End1 fill:#9E9E9E,color:#fff
 ```
 
@@ -678,7 +691,7 @@ This phase manages the outbound notification to the SAMA endpoint confirming tha
 
 | # | Limitation | Impact | Priority |
 |---|------------|--------|----------|
-| 1 | Only first hold record processed per account | Multiple holds ignored | High |
+| 1 | Only first hold record processed per account | Multiple holds ignored | [RESOLVED] Fixed in Refactored.esql via multi-hold loop / progressive consumption |
 | 4 | No idempotency / deduplication | Duplicate deposits on MQ retry | High |
 | 6 | PII logged in full | SAMA data protection non-compliance | Medium |
 | 7 | Single error code for all DB failures | Hard to diagnose in production | Low |
