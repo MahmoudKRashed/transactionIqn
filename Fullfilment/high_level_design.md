@@ -6,7 +6,7 @@
 **Date:** 2026-03-30  
 **Status:** Extracted from production IIB codebase  
 **System:** ESB Integration Layer (IBM IIB)  
-**Regulatory Body:** SAMA (Saudi Arabian Monetary Authority)jdbc
+**Regulatory Body:** SAMA (Saudi Arabian Monetary Authority)
 
 ---
 
@@ -50,7 +50,7 @@ graph TB
     K2 -->|SOAP| ExecSvc
     ExecSvc -->|MQ/XMLNSC| App1
     App1 -->|SOAP| SAMA
-    App1 & ExecSvc <-->|ODBC| DB
+    App1 & ExecSvc <-->|JDBC| DB
 ```
 
 ---
@@ -65,7 +65,7 @@ graph TB
 | **K2 / SAMA Adapter** | `K2IntService.svc` | SOAP/HTTP | Outbound | Send received amount notification |
 | **K2 / SAMA Adapter** | `TanfeethExecutionProcessService` | SOAP/HTTP | Inbound | Receive approval/rejection |
 | **SAMA Backend** | `FIFFResrvdAmtCallBack` | SOAP/HTTP | Outbound | Report final approved amounts |
-| **Tanfeeth Database** | `SAIBAPP` ODBC | SQL/ODBC | Bidirectional | Persistence & lookups |
+| **Tanfeeth Database** | `SAIBAPP` JDBC | SQL/JDBC | Bidirectional | Persistence & lookups |
 
 ### 2.2 Application Components
 
@@ -89,15 +89,17 @@ graph LR
     P1["Phase 1<br/>Deposit<br/>Ingestion"]
     P2["Phase 2<br/>Threshold<br/>Evaluation"]
     P3["Phase 3<br/>K2/SAMA<br/>Notification"]
-    P4["Phase 4<br/>K2 Approval<br/>Processing"]
+    P4["Phase 4<br/>K2 Confirmation<br/>& Security Gate"]
+    P4b["Phase 4.5<br/>EOD Batch<br/>Sweep"]
     P5["Phase 5<br/>SAMA<br/>Callback"]
 
-    P1 --> P2 --> P3 --> P4 --> P5
+    P1 --> P2 --> P3 --> P4 --> P4b --> P5
 
     style P1 fill:#2196F3,color:#fff
     style P2 fill:#FF9800,color:#fff
     style P3 fill:#4CAF50,color:#fff
     style P4 fill:#9C27B0,color:#fff
+    style P4b fill:#3F51B5,color:#fff
     style P5 fill:#F44336,color:#fff
 ```
 
@@ -128,7 +130,7 @@ sequenceDiagram
             F1->>DB: getCurrencyByCurrencyCode()
             DB-->>F1: Currency exponent
             F1->>F1: Calculate depositAmount = rawAmt / 10^exponent
-            F1->>DB: INSERT FULFILLMENT_DEPOSIT_AMOUNTS (STATUS='0')
+            F1->>DB: INSERT FULFILLMENT_DEPOSIT_AMOUNTS (STATUS=0)
             F1->>DB: COMMIT
         end
     end
@@ -148,7 +150,7 @@ sequenceDiagram
                 alt Condition 3 met
                     F1->>F1: K2=true, depositRecords=true
                 else No condition met
-                    F1->>DB: UpdateStatus(eventId, '1')
+                    F1->>DB: UpdateStatus(eventId, 1)
                     F1->>F1: RETURN FALSE (no output)
                 end
             end
@@ -167,35 +169,50 @@ sequenceDiagram
         end
         F1->>K2: SOAP Request (via K2Call subflow)
         K2-->>F1R: SOAP Response (K2RefNum)
-        F1R->>DB: UpdateStatus(eventId, '2')
+        F1R->>DB: UpdateStatus(eventId, 2)
         F1R->>DB: INSERT K2_EXECUTION_INFO
     end
     rect rgb(156, 39, 176, 0.1)
-        Note over K2,DB: Phase 4 — K2 Approval Processing
+        Note over K2,DB: Phase 4 — K2 Approval & Security Guard
         K2->>ExecSvc: FulfillmentRecievedAmountApproval (SOAP)
         ExecSvc->>ExecSvc: Check Submission Window (BR-02, BR-03)
-        alt Out of window (Window: 21:00 - 06:00)
+        alt Out of window
             ExecSvc-->>K2: SOAP Fault (User Exception)
         else Valid window
-            ExecSvc->>DB: getAccountHold (validate hold)
-            loop For each Credit in CreditList
+            ExecSvc->>DB: getAccountHold (fetch physical SAMA req)
+            loop Secure Mathematical Capping
                 alt Credit.Approved = true
-                    ExecSvc->>DB: UPDATE STATUS='3' (approved)
+                    ExecSvc->>ExecSvc: Validate currentAmount > dbAmount
+                    ExecSvc->>ExecSvc: Validate batchSum > holdLimit
+                    alt Validation Fails
+                        ExecSvc-->>K2: Hard SOAP Fault (BIPmsgs 2951)
+                    else Validation Passes
+                        ExecSvc->>DB: MERGE INTO K2_SAMA_LEDGER
+                        ExecSvc->>DB: UPDATE FULFILLMENT_DEPOSIT_AMOUNTS
+                    end
                 else Credit.Approved = false
-                    ExecSvc->>DB: UPDATE STATUS='4' (rejected)
+                    ExecSvc->>DB: UPDATE STATUS=4
                 end
             end
-            ExecSvc->>DB: Update declaration tables
-            ExecSvc-->>K2: SOAP Success Response
-            ExecSvc->>MQ2: Route to FULFIL.IN queue
+            ExecSvc-->>K2: SOAP Success Response (No MQ Routing)
+        end
+    end
+    rect rgb(63, 81, 181, 0.1)
+        Note over DB,MQ2: Phase 4.5 — EOD Batch Job
+        loop Timer Scheduled Sweep (TimeoutNotification)
+            F2->>DB: SELECT criteria_id FROM K2_SAMA_LEDGER
+            F2->>F2: Check total_approved >= hold_amount OR >= 5000
+            alt Eligible
+                F2->>DB: UPDATE Ledger STATUS=5 & HOLD STATUS=F
+                F2->>MQ2: Route XMLNSC Request to FULFIL.IN
+            end
         end
     end
     rect rgb(244, 67, 54, 0.1)
         Note over MQ2,SAMA: Phase 5 — SAMA Callback
-        MQ2->>F2: Consume callback message
-        F2->>DB: Get account & hold details
+        MQ2->>F2: Consume XMLNSC Request (Routed from EOD)
+        F2->>DB: Compile EventIDs and Details
         F2->>F2: Build FIFFResrvdAmtCallBack SOAP
-        F2->>DB: INSERT FULFILLMENT_RECIEVED_AMOUNT_CB
         F2->>SAMA: SOAP Request
         alt Success
             SAMA-->>F2: Success Response
@@ -259,13 +276,10 @@ graph LR
     subgraph "TanfeethExecutionProcessService.msgflow (Fulfillment path)"
         SI["SOAP Input<br/>5 Operations"] --> SPP["SOAP<br/>PreProcessing"]
         SPP --> RTL["Route To Label"]
-        RTL -->|FulfillmentRecieved<br/>AmountApproval| FS["Fulfillment<br/>Subflow<br/>───────────<br/>• Validate hold<br/>• Loop credits<br/>• Status 3/4<br/>• Update decl"]
+        RTL -->|FulfillmentRecieved<br/>AmountApproval| FS["Fulfillment<br/>Subflow<br/>───────────<br/>• Validate hold<br/>• Security Math Caps<br/>• Merge Ledger<br/>• Throw SOAP Faults"]
         FS --> SPost["SOAP<br/>PostProcessing"]
         SPost --> FO["Flow Order"]
         FO -->|1st| SR["SOAP Reply"]
-        FO -->|2nd| Route{"Route<br/>RequestType"}
-        Route -->|Fulfillment| PF["PrepareRequest<br/>ForFulfillment<br/>───────────<br/>• Build MQ msg<br/>• Set queue name"]
-        PF --> MQH["MQ Header"] --> MQOut["MQ Output"]
     end
 ```
 
@@ -286,7 +300,7 @@ erDiagram
         DECIMAL REMAINING_AMOUNT
         VARCHAR DEPOSIT_CURRENCY
         VARCHAR ACCOUNT_CURRENCY
-        VARCHAR STATUS "0=Pending, 1=Processed, 2=SentToK2, 3=Approved, 4=Rejected"
+        VARCHAR STATUS "0-Pending, 1-Processed, 2-SentToK2, 3-Approved, 4-Rejected"
         VARCHAR TRANSACTION_DIRECTION
         VARCHAR SRN "SAMA Reference Number"
         VARCHAR IBAN
@@ -306,7 +320,7 @@ erDiagram
         VARCHAR CRITERIA_ID FK
         DECIMAL HOLD_AMOUNT
         DECIMAL ACCUMULATED_AMOUNT
-        VARCHAR STATUS "1=Partially Fulfilled, 2=Fully Fulfilled"
+        VARCHAR STATUS "1-Partially Fulfilled, 2-Fully Fulfilled"
     }
 
     ACCOUNT_HOLD {
@@ -321,6 +335,13 @@ erDiagram
     CRITERIA_DETAILS {
         VARCHAR CRITERIA_ID PK
         VARCHAR SRN "SAMA Reference Number"
+    }
+
+    K2_SAMA_LEDGER {
+        VARCHAR CRITERIA_ID FK
+        INTEGER EVENT_ID FK
+        DECIMAL APPROVED_AMOUNT
+        VARCHAR STATUS "3-Approved, 5-Delivered"
     }
 
     K2_EXECUTION_INFO {
@@ -667,23 +688,23 @@ graph TD
 
 This process activates when the K2 portal returns approval payloads back through `TanfeethExecutionProcessService`.
 
-### 12.1 Execution Routing
-1. The K2 portal invokes the `FulfillmentRecievedAmountApproval` process via ESB.
-2. The core router maps the incoming approval to the `IIB.TNFTH.EXECUTION.K2.PRCS.FULFIL.IN` internal queue.
-3. The original declaration and deposit lists are re-queried, updating execution logic.
-4. Database updates trigger status shifts to `STATUS = '3'` (Approved) or `STATUS = '4'` (Rejected).
+### 12.1 Execution Routing & Security Gate
+1. The K2 portal invokes the `FulfillmentRecievedAmountApproval` process natively.
+2. The code calculates a dual-layer Security Cap running total to explicitly block Over-Approvals and Batch Overflows relative to the core deposit and absolute SAMA hold requirements.
+3. If K2 passes bad math, a synchronous SOAP Exception is thrown, blocking database commits and firing `BIPmsgs 2951` directly back to the human reviewer.
+4. If math is valid, a `MERGE INTO TANFEETHEXEC.K2_SAMA_LEDGER` successfully persists the exact UI intents isolated by `CRITERIA_ID`.
 
 ---
 
-## 13. Phase 5: SAMA Callback Integration
+## 13. Phase 5: Decoupled EOD Callback Integration
 
-This phase manages the outbound notification to the SAMA endpoint confirming that the held funds have successfully been reserved for fulfillment.
+This phase completely isolates Callback latency from human UX by operating as a decoupled polling agent.
 
-### 13.1 Callback Logic
-1. Messages land on `IIB.TNFTH.EXECUTION.K2.PRCS.FULFIL.IN`.
-2. The Integration App formats the payload via DFDL/XML schema parameters towards `FIFFResrvdAmtCallBack`.
-3. If an HTTP connection issue or 500 error takes place with SAMA, the system logs the fault and transitions into the Fallback sequence.
-4. The response status is logged comprehensively into `TANFEETHEXEC.K2_EXECUTION_INFO` to leave a robust audit trail.
+### 13.1 EOD Batch Logic (`TanfeethFulfillmentEODJob`)
+1. **The Sweep:** Periodically wakes up and natively queries `STANFEETHEXEC.K2_SAMA_LEDGER` via a grouping SQL join.
+2. **The Verification Matrix:** Evaluates: `IF (TOTAL_APPROVED >= HOLD_AMOUNT) OR (TOTAL_APPROVED >= 5000 SAR Regulatory Threshold)`.
+3. **The MQ Handoff:** Forbs an exact structured payload holding all `EVENT_ID` tags natively inside `TotalApprovedAccCur` constraints, propelling it to `IIB.TNFTH.EXECUTION.K2.PRCS.FULFIL.IN`.
+4. **The SAMA Final Mile:** The callback integration parses the MQ structure into the final `FIFFResrvdAmtCallBack` SOAP document shipped directly to the SAMA endpoint.
 
 ---
 
